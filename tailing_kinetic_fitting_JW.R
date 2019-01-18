@@ -18,116 +18,71 @@
 
 #The script was based on the code of the following post:
 #https://notesofdabbler.wordpress.com/2013/06/30/learning-r-parameter-fitting-for-models-involving-differential-equations/
-
 # (January 2019)
 
-library(deSolve)
-library(minpack.lm)
-#library(viridis) #allows you to use viridis, magma, ... color schemes
+source("solution_kinetic_model_for_tailing.R")
+##########################################
+# import adn prepare data table
+##########################################
+A <- read.csv(file="R_file_TAAG.csv", header=TRUE, sep=";")
+B <- read.csv(file="Final_Tailing_RNAseq.csv", header=TRUE, sep=";")
 
-#read your .csv file into variable A and save as matrix called Data;
-A <- read.csv(file="/Users/annamaria.sgromo/Desktop/R/R_file_TAAG.csv", header=TRUE, sep=";")
-Data <- as.matrix(A)
+Data <- data.frame(B, stringsAsFactors = FALSE)
 print(Data)
-print(Data[,2:ncol(Data)])
+#print(Data[,2:ncol(Data)])
+head(Data)
 
-#define Parms as list of rates k; here we define k1 to k... = 1
-Parms <- as.list(rep(1, ncol(Data)-2))
+##########################################
+# specify parameters and initia conditions
+##########################################
+times = Data$Time;
+Parms <- rep(1, ncol(Data)-1) # simply just a vector
 
-reactionrates=function(Time, c, Parms){
-  #define r as a vector of zeroes, has the length of the number of required differential equations
-  r=rep(0, ncol(Data)-1)
-  
-  #in the following we replace the zeroes in r with differential equations
-  #differential equation(DE) of substrate (U0) consumption:
-  r[1]=-Parms[[1]]*c["U0"]
-  
-  #DEs of first till n-1th tailing events:
-  for(i in 2:(ncol(Data)-2)){
-    r[i]=Parms[[i-1]]*c[paste("U", i-2, sep="")]-Parms[[i]]*c[paste("U" ,i-1, sep="")]
-  }
+cinit = c(1, rep(0, ncol(Data)-2))
+names(cinit) = paste0("U", c(0:(length(cinit)-1)))  
 
-  #DE of last tailing event
-  r[ncol(Data)-1]=Parms[[ncol(Data)-2]]*c[paste("U", ncol(Data)-3, sep="")]
-  
-  return(list(r))
-  #the resulting DEs should be:
-  #  r[1]=-k1*c["U0"]
-  #  r[2]=k1*c["U0"]-k2*c["U1"]
-  #  r[3]=k2*c["U1"]-k3*c["U2"]
-  #  r[4]=k3*c["U2"]-k4*c["U3"]
-  #  r[5]=k4*c["U3"]-k5*c["U4"]
-  #  r[6]=k5*c["U4"]-k6*c["U5"]
-  #  r[7]=k6*c["U5"]
-}
-
-#define initial concentrations as list specifying the initial concentration of each species
-#here we define U0=1; all others (U1, U2, U3, ...) are 0.
-Initial_concentrations <-list()
-Name <- "U0"
-Initial_concentrations[[Name]] <- 1
-for(i in 1:(ncol(Data)-2)){
-  Name <- paste("U", i, sep="")
-  Initial_concentrations[[Name]] <- 0
-}
-
-#to put Initial concentrations into ODE solver they need to be in vector format. ICs now defined as initial concentrations in vector format:
-ICs <- unlist(Initial_concentrations)
-
-#solving ODEs to get predicted concentrations (c in reactionrates) with guessed Parms; out  is the solution to the ODEs (matrix format)
-cinit=ICs
-t=Data[,1]
-out=ode(y=cinit, times=t, func=reactionrates, parms=Parms)
-#head(out)
+## test the ODE solution
+out=ode(y=cinit, times=times, func=reactionrates, parms=Parms)
 print(out)
-
-#The following is a solution of the ODEs with high time resolution for plotting of the model with guessed parameters
-#note that the solution to the ODEs is almost the same as above for out (different times here)
+par(mfrow = c(1, 1))
 modeltimes <- seq(from=0, to=20, by=0.1)
 plotmodel=ode(y=cinit, times=modeltimes, func=reactionrates, parms=Parms)
 matplot(modeltimes, plotmodel[,2:ncol(plotmodel)], type="l", lty="solid", lwd=2, pch=19, col=rainbow(ncol(Data)-1))
-legend("right", c(names(Initial_concentrations)), fill=rainbow(ncol(Data)-1))
+legend("right", c(names(cinit)), fill=rainbow(ncol(Data)-1))
 
-#Define difference as function to calculate the difference between model and data for least square regression:
-Difference=function(Parms){
-  cinit=ICs
-  t=Data[,1]
-  #solve ODE as before (out)
-  model=ode(y=cinit, times=t, func=reactionrates, parms=Parms)
-  #calculate difference between model and data:
-  Diff <- matrix(model-Data)
-  return(Diff)
-}
+##########################################
+# initialize argument for optim function
+# then run optim for fitting the data to the model
+# at the end get estimated parameters
+# due to large number of parameters, the fitting step can be quite slow
+# one solution is to chose good starting points of parameters, which is tested below 
+##########################################
+#pars.init = rep(1, length(Parms));
+K0.warmup= abs(lm(log(Data[, 2]) ~ times - 1 )$coefficients) # fit the log(U0) with linear regression and get the first guess for K0
+par.init = rep(K0.warmup, length(Parms))
+lower.bounds = rep(0, length(Parms)) # lower boundaries for parameters
+upper.bounds = rep(K0.warmup*10, length(Parms))
 
-#Nonlinear Least Square (NLS) regression using Levenberg-Marquardt (LM) algorithm to fit model to data; define Ks as list of optimized rates:
-fit=nls.lm(par=Parms, fn=Difference)
-summary(fit)
-Ks <- as.list(coef(fit))
+fit = optim(pars.init, f2min, times = times, dat = Data[, -1], cinit = cinit,
+            method = 'L-BFGS-B', lower = lower.bounds, upper = upper.bounds,
+            control = list(maxit=500,trace=0), hessian = FALSE)
+
+#summary()
+Ks <- fit$par
 print(Ks)
-
-#calculate fitted model by solving ODE with Ks, see also function "reactionrates":
-plotfit=function(Time, c, Parms){
-  f=rep(0, ncol(Data)-1)
-  
-  f[1]=-Ks[[1]]*c["U0"]
-  
-  for(i in 2:(ncol(Data)-2)){
-    f[i]=Ks[[i-1]]*c[paste("U", i-2, sep="")]-Ks[[i]]*c[paste("U" ,i-1, sep="")]
-  }
-  
-  f[ncol(Data)-1]=Ks[[ncol(Data)-2]]*c[paste("U", ncol(Data)-3, sep="")]
-  
-  return(list(f))
-}
-
-cinit=ICs
-t=Data[,1]
 
 #plot the Data and the fit
 #here it would actually be good to INCREASE THE t RESOLUTION TO MAKE PLOT LESS "EDGY" !!!
-optimized=ode(y=cinit, times=t, func=plotfit, parms=Parms)
-matplot(Data[,1], Data[,2:ncol(Data)], pch=19, col=rainbow(ncol(Data)-1))
-matlines(Data[,1], optimized[,2:ncol(optimized)], lty="solid", pch=19, col=rainbow(ncol(Data)-1))
+optimized=ode(y=cinit, times=modeltimes, func=reactionrates, parms=Ks)
+
+par(mfrow = c(3, 4))
+cols = rainbow((ncol(Data)))
+
+for(n in 2:ncol(Data)){
+  plot(times, Data[,n], pch=19, col=cols[n], main = colnames(Data)[n], ylim = range(c(Data[,n], optimized[, n])))
+  points(modeltimes, optimized[, n], lty="solid", pch=19, col=cols[n], type = "l")
+}
+
 
 #to plot each single events
 df <- as.data.frame(Data)

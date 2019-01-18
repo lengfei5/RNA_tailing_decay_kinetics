@@ -21,7 +21,6 @@
 
 # (January 2019)
 
-
 library(deSolve)
 library(minpack.lm)
 #library(viridis) #allows you to use viridis, magma, ... color schemes
