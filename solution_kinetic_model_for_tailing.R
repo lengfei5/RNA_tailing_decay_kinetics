@@ -35,6 +35,30 @@ reactionrates=function(t, c, Parms){
   #  r[7]=k6*c["U5"] - K7*c["U6"]
 }
 
+
+simu_reactions_withDecay = function(t, c, Parms)
+{
+  r=rep(0, length(c))
+  k = Parms[c(1:length(c))]
+  gamma = Parms[c((length(c)+1):length(Parms))]
+  
+  #r[1]= - (transition[1] + gamma[1])*c[1]
+  r[1]= - k[1] * c[1] + gamma[1] * c[2]
+  
+  #DEs of first till n-1th tailing events:
+  for(i in 2:length(r)){
+    #r[i]=transition[i-1]*c[i-1] - (transition[i] + gamma[i])*c[i]
+    if(i < length(r)) {
+      r[i]= k[i-1]*c[i-1] + gamma[i] * c[i+1] - (k[i] + gamma[i-1])*c[i]  
+    }else{
+      r[i]= k[i-1]*c[i-1]  - (k[i] + gamma[i-1])*c[i]  
+    }
+  }
+  
+  
+  
+  return(list(r)) 
+}
 ##########################################
 # define the error function for fitting using optim
 ##########################################
@@ -49,4 +73,12 @@ f2min=function(pars.init, times, dat, cinit){
   return(error2)
 }
 
-
+f2min_decay=function(pars.init, times, dat, cinit){
+  #cinit=ICs
+  #t=Data[,1]
+  #solve ODE as before (out)
+  model=ode(y=cinit, times=times, func=simu_reactions_withDecay, parms=pars.init)
+  #calculate difference between model and data:
+  error2 <- sum((model[, -1]-dat)^2)
+  return(error2)
+}
